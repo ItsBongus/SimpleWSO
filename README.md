@@ -1,5 +1,7 @@
 # SimpleWSO
 
+Gunners and Weapon System Officers for Nuclear Option
+
 A BepInEx mod for **Nuclear Option** that lets a second player take co-control of an
 aircraft's weapon stations while the pilot keeps flying. Built for BepInEx 5 (Mono) +
 Harmony, networking over the game's Mirage stack.
