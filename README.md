@@ -39,7 +39,9 @@ You can change these camera offsets along with keybinds and an option so that wh
 crewman.
 
 BepInEx Configuration Manager (https://github.com/BepInEx/BepInEx.ConfigurationManager or downloadable via NOMM) is the easiest way to change these. You just press F1 in game. Otherwise you can change the settings in: 
-\Nuclear Option\BepInEx\config\nuclearoption.simplewso.cfg
+`\Nuclear Option\BepInEx\config\com.bongus.simplewso.cfg`
+
+Camera offsets are under **F1 → SimpleWSO → CameraOffsets**. Each aircraft appears as its own collapsible group (e.g. **UH-90 Ibis**) with **Position 1–4** inside. New airframes get the same treatment after you gunner them once (reopen F1 if the group is not visible yet). Values are aircraft-local meters (`X` right, `Y` up, `Z` forward). Empty positions are ignored in-game.
 
 ### Default Controls ###
 | Key | Config entry | Action |

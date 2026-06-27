@@ -22,7 +22,7 @@ namespace SimpleWSO.Patches
                 return true;
 
             var aircraft = attachedUnit as Aircraft;
-            if (aircraft == null || !aircraft.LocalSim)
+            if (aircraft == null || aircraft.disabled || !aircraft.LocalSim)
                 return true;
 
             if (!TryGetStation(aircraft, __instance, out TurretStation station))

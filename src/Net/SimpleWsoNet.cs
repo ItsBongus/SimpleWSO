@@ -39,6 +39,7 @@ namespace SimpleWSO.Net
         private static readonly HashSet<long> _remoteGunnerStations = new HashSet<long>();
         private static readonly Dictionary<long, float> _lastAimSent = new Dictionary<long, float>();
         private static readonly Dictionary<long, Vector3> _lastAimDirSent = new Dictionary<long, Vector3>();
+        private static readonly Dictionary<uint, Aircraft> _ownerSubscribedAircraft = new Dictionary<uint, Aircraft>();
 
         // Last target persistentID we replicated per station. The turret-target Cmd is
         // rate-limited by the game, so we only re-send when the gunner's target changes.
@@ -113,6 +114,7 @@ namespace SimpleWSO.Net
             Initialized = false;
             _client = null;
             _server = null;
+            UnsubscribeOwnerAircraft();
             _ownerAim.Clear();
             _ownerTargetNetIds.Clear();
             _ownerFiring.Clear();
@@ -294,6 +296,7 @@ namespace SimpleWSO.Net
         {
             var ts = ResolveOwned(m.AircraftNetId, m.Station);
             if (ts == null) return;
+            SubscribeOwnerAircraft(ts.Aircraft);
             _remoteGunnerStations.Add(Key(m.AircraftNetId, m.Station));
             TurretController.EngageManual(ts);
             TurretController.ReleaseTurretTargetLock(ts);
@@ -302,22 +305,10 @@ namespace SimpleWSO.Net
 
         private static void OnLeave(GunnerLeaveMsg m)
         {
-            var k = Key(m.AircraftNetId, m.Station);
-            _ownerAim.Remove(k);
-            _ownerTargetNetIds.Remove(k);
-            _ownerFiring.Remove(k);
-            _remoteGunnerStations.Remove(k);
-            bool hadTarget = _ownerAppliedTargetId.TryGetValue(k, out var appliedId) && appliedId != 0u;
-            _ownerAppliedTargetId.Remove(k);
-            var ts = ResolveOwned(m.AircraftNetId, m.Station);
-            if (ts == null) return;
-            // Drop the replicated lock so the turret doesn't keep engaging the gunner's
-            // last target after the gunner leaves; vanilla AI then resumes normally.
-            if (hadTarget)
-                TurretController.ApplyStationTarget(ts, null);
-            TurretController.ReleaseManual(ts);
-            if (ts.Aircraft?.weaponManager?.currentWeaponStation == ts.Station)
-                ts.Station.SetStationActive(ts.Aircraft, true);
+            var ts = ResolveOwned(m.AircraftNetId, m.Station, allowDisabled: true);
+            CleanupOwnerStation(m.AircraftNetId, m.Station, ts, restoreStationActive: true);
+            if (!HasOwnerStateForAircraft(m.AircraftNetId))
+                UnsubscribeOwnerAircraft(m.AircraftNetId);
         }
 
         private static void OnFire(GunnerFireMsg m)
@@ -368,10 +359,143 @@ namespace SimpleWSO.Net
 
             foreach (var k in stale)
             {
-                _ownerAim.Remove(k);
-                _ownerTargetNetIds.Remove(k);
-                _ownerFiring.Remove(k);
-                _ownerAppliedTargetId.Remove(k);
+                uint netId = (uint)(k >> 8);
+                byte station = (byte)(k & 0xFF);
+                var ts = ResolveOwned(netId, station, allowDisabled: true);
+                CleanupOwnerStation(netId, station, ts, restoreStationActive: false);
+                if (!HasOwnerStateForAircraft(netId))
+                    UnsubscribeOwnerAircraft(netId);
+            }
+        }
+
+        private static void SubscribeOwnerAircraft(Aircraft aircraft)
+        {
+            if (aircraft == null || _ownerSubscribedAircraft.ContainsKey(aircraft.NetId))
+                return;
+
+            aircraft.onDisableUnit += OnOwnedAircraftDisabled;
+            _ownerSubscribedAircraft[aircraft.NetId] = aircraft;
+        }
+
+        private static void UnsubscribeOwnerAircraft(uint netId)
+        {
+            if (!_ownerSubscribedAircraft.TryGetValue(netId, out var aircraft))
+                return;
+
+            if (aircraft != null)
+                aircraft.onDisableUnit -= OnOwnedAircraftDisabled;
+            _ownerSubscribedAircraft.Remove(netId);
+        }
+
+        private static void UnsubscribeOwnerAircraft()
+        {
+            foreach (var pair in new List<KeyValuePair<uint, Aircraft>>(_ownerSubscribedAircraft))
+            {
+                if (pair.Value != null)
+                    pair.Value.onDisableUnit -= OnOwnedAircraftDisabled;
+            }
+            _ownerSubscribedAircraft.Clear();
+        }
+
+        // Vanilla invokes onDisableUnit from inside Unit.UnitDisabled (synchronously, during crash /
+        // ReturnToInventory teardown). If our cleanup throws here it unwinds vanilla's disable
+        // sequence before WaitRemoveAircraft()/Destroy(), leaving the airframe alive forever. Never
+        // let this handler throw back into vanilla.
+        private static void OnOwnedAircraftDisabled(Unit unit)
+        {
+            try
+            {
+                if (unit is Aircraft aircraft)
+                    CleanupOwnerAircraft(aircraft, "disabled");
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Log.LogWarning($"[Net] onDisableUnit cleanup error (ignored): {e.GetType().Name}: {e.Message}");
+            }
+        }
+
+        private static void CleanupOwnerAircraft(Aircraft aircraft, string reason)
+        {
+            if (aircraft == null) return;
+
+            uint netId = aircraft.NetId;
+            var stationLookup = new Dictionary<byte, TurretStation>();
+            foreach (var station in StationDiscovery.GetGunnerStations(aircraft))
+            {
+                if (station != null)
+                    stationLookup[station.Number] = station;
+            }
+
+            var keys = new HashSet<long>();
+            CollectOwnerKeysForAircraft(_remoteGunnerStations, netId, keys);
+            CollectOwnerKeysForAircraft(_ownerAim.Keys, netId, keys);
+            CollectOwnerKeysForAircraft(_ownerTargetNetIds.Keys, netId, keys);
+            CollectOwnerKeysForAircraft(_ownerFiring, netId, keys);
+            CollectOwnerKeysForAircraft(_ownerAppliedTargetId.Keys, netId, keys);
+
+            foreach (long key in keys)
+            {
+                byte stationNumber = (byte)(key & 0xFF);
+                stationLookup.TryGetValue(stationNumber, out var station);
+                CleanupOwnerStation(netId, stationNumber, station, restoreStationActive: false);
+            }
+
+            UnsubscribeOwnerAircraft(netId);
+
+            if (keys.Count > 0)
+                Plugin.Log.LogInfo($"[Net] Cleared {keys.Count} remote gunner station(s) for aircraft {netId} ({reason}).");
+        }
+
+        private static void CollectOwnerKeysForAircraft(IEnumerable<long> source, uint netId, HashSet<long> keys)
+        {
+            foreach (long key in source)
+            {
+                if ((uint)(key >> 8) == netId)
+                    keys.Add(key);
+            }
+        }
+
+        private static bool HasOwnerStateForAircraft(uint netId)
+        {
+            foreach (long key in _remoteGunnerStations)
+                if ((uint)(key >> 8) == netId) return true;
+            foreach (long key in _ownerAim.Keys)
+                if ((uint)(key >> 8) == netId) return true;
+            foreach (long key in _ownerTargetNetIds.Keys)
+                if ((uint)(key >> 8) == netId) return true;
+            foreach (long key in _ownerFiring)
+                if ((uint)(key >> 8) == netId) return true;
+            foreach (long key in _ownerAppliedTargetId.Keys)
+                if ((uint)(key >> 8) == netId) return true;
+
+            return false;
+        }
+
+        private static void CleanupOwnerStation(uint netId, byte station, TurretStation ts, bool restoreStationActive)
+        {
+            long key = Key(netId, station);
+            _ownerAim.Remove(key);
+            _ownerTargetNetIds.Remove(key);
+            _ownerFiring.Remove(key);
+            _remoteGunnerStations.Remove(key);
+            bool hadTarget = _ownerAppliedTargetId.TryGetValue(key, out var appliedId) && appliedId != 0u;
+            _ownerAppliedTargetId.Remove(key);
+
+            if (ts == null)
+                return;
+
+            // Drop the replicated lock so the turret doesn't keep engaging the gunner's
+            // last target after the gunner leaves; vanilla AI then resumes normally.
+            if (hadTarget && ts.Aircraft != null && !ts.Aircraft.disabled)
+                TurretController.ApplyStationTarget(ts, null);
+
+            TurretController.ReleaseManual(ts);
+            if (restoreStationActive &&
+                ts.Aircraft != null &&
+                !ts.Aircraft.disabled &&
+                ts.Aircraft?.weaponManager?.currentWeaponStation == ts.Station)
+            {
+                ts.Station.SetStationActive(ts.Aircraft, true);
             }
         }
 
@@ -410,9 +534,9 @@ namespace SimpleWSO.Net
         }
 
         /// <summary>Resolve an aircraft by NetId, but ONLY if this client owns/locally-sims it.</summary>
-        private static TurretStation ResolveOwned(uint netId, byte station)
+        private static TurretStation ResolveOwned(uint netId, byte station, bool allowDisabled = false)
         {
-            var ac = ResolveOwnedAircraft(netId);
+            var ac = ResolveOwnedAircraft(netId, allowDisabled);
             if (ac == null) return null;
 
             foreach (var ts in StationDiscovery.GetGunnerStations(ac))
@@ -420,13 +544,13 @@ namespace SimpleWSO.Net
             return null;
         }
 
-        private static Aircraft ResolveOwnedAircraft(uint netId)
+        private static Aircraft ResolveOwnedAircraft(uint netId, bool allowDisabled = false)
         {
             if (_client == null || _client.World == null) return null;
             if (!_client.World.TryGetIdentity(netId, out var identity) || identity == null) return null;
 
             var ac = identity.GetComponent<Aircraft>();
-            return ac != null && !ac.disabled && ac.LocalSim ? ac : null;
+            return ac != null && (allowDisabled || !ac.disabled) && ac.LocalSim ? ac : null;
         }
 
         private static List<Unit> ResolveOwnerTargets(long key)

@@ -19,6 +19,8 @@ namespace SimpleWSO.Gunner
         private Aircraft _subscribedAircraft;
         private bool _leaving;
         private float _nextViewRepairLog;
+        private CameraBaseState _lastGunnerCameraState;
+        private string _pendingLeaveReason;
 
         public void TakeAircraft(Aircraft ac)
         {
@@ -60,12 +62,16 @@ namespace SimpleWSO.Gunner
             GunnerState.TargetAircraft = ac;
             GunnerState.Stations = stations;
             GunnerState.CameraPositionIndex = 0;
+            _pendingLeaveReason = null;
 
             _isOwner = ac.LocalSim;
             SubscribeAircraft(ac);
 
+            SimpleWsoConfig.EnsureCameraOffsetsFor(ac);
+
             _view.Enter(stations[stationIndex]);
             SelectStation(stationIndex, skipViewRefresh: true);
+            _lastGunnerCameraState = CameraStateManager.i != null ? CameraStateManager.i.currentState : null;
 
             var ts = GunnerState.Current;
             var ownPlane = StationDiscovery.FindLocalAircraft();
@@ -107,6 +113,8 @@ namespace SimpleWSO.Gunner
             {
                 _isOwner = false;
                 _firing = false;
+                _lastGunnerCameraState = null;
+                _pendingLeaveReason = null;
                 _leaving = false;
             }
         }
@@ -114,6 +122,14 @@ namespace SimpleWSO.Gunner
         public void Update()
         {
             if (!GunnerState.Active) return;
+
+            if (_pendingLeaveReason != null)
+            {
+                string reason = _pendingLeaveReason;
+                _pendingLeaveReason = null;
+                Leave(reason);
+                return;
+            }
 
             if (!ValidateSession())
                 return;
@@ -138,12 +154,12 @@ namespace SimpleWSO.Gunner
             var ts = GunnerState.Current;
             if (ts == null) return;
 
-            if (!_view.IsAttachedTo(GunnerState.TargetAircraft))
+            var csm = CameraStateManager.i;
+            if (!IsValidGunnerCameraState(csm))
             {
-                var csm = CameraStateManager.i;
-                if (csm != null && csm.currentState != csm.cockpitState)
+                if (csm == null || csm.followingUnit != GunnerState.TargetAircraft)
                 {
-                    Leave("camera left cockpit");
+                    Leave("camera left gunner aircraft");
                     return;
                 }
 
@@ -153,6 +169,10 @@ namespace SimpleWSO.Gunner
                     _nextViewRepairLog = Time.time + 5f;
                     Plugin.Log.LogWarning("[View] Cockpit camera was detached unexpectedly; reattached.");
                 }
+            }
+            else
+            {
+                RefreshCockpitUiAfterViewCycle(csm, ts);
             }
 
             Vector3 dir = _view.AimForward;
@@ -214,6 +234,34 @@ namespace SimpleWSO.Gunner
             }
 
             return true;
+        }
+
+        private static bool IsValidGunnerCameraState(CameraStateManager csm)
+        {
+            if (csm == null || GunnerState.TargetAircraft == null)
+                return false;
+
+            if (csm.followingUnit != GunnerState.TargetAircraft)
+                return false;
+
+            CameraBaseState state = csm.currentState;
+            return state == csm.cockpitState ||
+                   state == csm.orbitState ||
+                   state == csm.TVState ||
+                   state == csm.chaseState;
+        }
+
+        private void RefreshCockpitUiAfterViewCycle(CameraStateManager csm, TurretStation ts)
+        {
+            CameraBaseState previousState = _lastGunnerCameraState;
+            CameraBaseState currentState = csm != null ? csm.currentState : null;
+            _lastGunnerCameraState = currentState;
+
+            if (currentState == null || currentState != csm.cockpitState || previousState == csm.cockpitState)
+                return;
+
+            _view.RefreshWeaponStation(ts);
+            Plugin.LogVerbose("[View] Refreshed gunner cockpit UI after camera cycle.");
         }
 
         /// <summary>
@@ -318,9 +366,24 @@ namespace SimpleWSO.Gunner
             _subscribedAircraft = null;
         }
 
+        /// <summary>
+        /// Vanilla fires onDisableUnit from INSIDE Unit.UnitDisabled, which runs synchronously
+        /// during the crash / ReturnToInventory teardown. Running our full Leave() teardown here
+        /// (camera state changes, HUD detach, turret cleanup) — or worse, throwing — unwinds
+        /// vanilla's own disable sequence before it reaches WaitRemoveAircraft()/Destroy(), so the
+        /// airframe is never removed. Record the intent only; the next Update() tick performs the
+        /// actual Leave() outside vanilla's call stack. Never let this method throw into vanilla.
+        /// </summary>
         private void OnTargetAircraftDisabled(Unit unit)
         {
-            Leave("target aircraft shot down");
+            try
+            {
+                _pendingLeaveReason = "target aircraft shot down";
+            }
+            catch (System.Exception e)
+            {
+                Plugin.Log.LogWarning($"[Gunner] onDisableUnit handler error (ignored): {e.GetType().Name}: {e.Message}");
+            }
         }
     }
 }

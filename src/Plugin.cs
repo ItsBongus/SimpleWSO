@@ -12,7 +12,7 @@ namespace SimpleWSO
     [BepInPlugin(Guid, Name, Version)]
     public class Plugin : BaseUnityPlugin
     {
-        public const string Guid = "nuclearoption.simplewso";
+        public const string Guid = "com.bongus.simplewso";
         public const string Name = "SimpleWSO";
         public const string Version = "1.0.0";
 

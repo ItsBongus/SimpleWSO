@@ -98,8 +98,16 @@ namespace SimpleWSO.Gunner
                 {
                     Plugin.LogVerbose($"[ViewState] Exit before follow={DescribeUnit(csm.followingUnit)} state={DescribeState(csm.currentState)} restoreFollow={DescribeUnit(_restoreUnit)} restoreState={DescribeState(_restoreState)} restoreMapMax={_restoreMapMaximized} mapMax={DynamicMap.mapMaximized} cursor={CursorManager.GetFlags()}");
 
-                    if (_restoreUnit != null)
-                        csm.SetFollowingUnit(_restoreUnit);
+                    Unit restoreUnit = ResolveRestoreUnit(csm);
+                    if (restoreUnit != null)
+                    {
+                        csm.SetFollowingUnit(restoreUnit);
+                    }
+                    else if (_restoreUnit != null)
+                    {
+                        Plugin.Log.LogInfo($"[ViewLifecycle] Clearing camera follow instead of restoring invalid unit {DescribeUnit(_restoreUnit)}.");
+                        csm.SetFollowingUnit(null);
+                    }
 
                     CameraBaseState restoreState = ResolveRestoreState(csm);
                     Plugin.LogVerbose($"[ViewState] Exit resolved restoreState={DescribeState(restoreState)} followAfterSet={DescribeUnit(csm.followingUnit)}");
@@ -145,6 +153,12 @@ namespace SimpleWSO.Gunner
         {
             if (csm == null) return _restoreState;
 
+            if (IsInvalidRestoreUnit(_restoreUnit) && csm.freeState != null)
+            {
+                Plugin.LogVerbose("[ViewState] Restore unit is invalid; using freeState.");
+                return csm.freeState;
+            }
+
             // If gunner was entered from vanilla map/unit targeting, don't restore that
             // interaction mode. Return to a normal spectator orbit of the followed unit.
             if (_restoreState == csm.selectionState && csm.orbitState != null)
@@ -160,6 +174,21 @@ namespace SimpleWSO.Gunner
             }
 
             return _restoreState;
+        }
+
+        private Unit ResolveRestoreUnit(CameraStateManager csm)
+        {
+            if (!IsInvalidRestoreUnit(_restoreUnit))
+                return _restoreUnit;
+
+            return null;
+        }
+
+        private static bool IsInvalidRestoreUnit(Unit unit)
+        {
+            if (unit == null) return false;
+            var aircraft = unit as Aircraft;
+            return aircraft != null && (aircraft.disabled || aircraft.HasEjected());
         }
 
         private static string DescribeState(CameraBaseState state)
@@ -333,10 +362,37 @@ namespace SimpleWSO.Gunner
         {
             if (_spawnedStatusDisplay != null)
             {
+                DetachStatusDisplayFromDisable(_spawnedStatusDisplay, _cockpitUiAircraft);
                 UnityEngine.Object.Destroy(_spawnedStatusDisplay);
                 _spawnedStatusDisplay = null;
             }
             _cockpitUiAircraft = null;
+        }
+
+        /// <summary>
+        /// Vanilla StatusDisplay.Initialize() does aircraft.onDisableUnit += StatusDisplay_OnDisable,
+        /// and StatusDisplay.OnDestroy() does NOT remove it — vanilla expects the display to live
+        /// until the aircraft disables and self-destructs in StatusDisplay_OnDisable. We destroy our
+        /// spawned display when leaving the seat, so we must remove that subscription ourselves.
+        /// Otherwise the stale delegate fires on a destroyed component when the airframe later
+        /// disables (NullReferenceException in get_gameObject), which unwinds vanilla's UnitDisabled
+        /// / ReturnToInventory before WaitRemoveAircraft() and the airframe never despawns.
+        /// </summary>
+        private static void DetachStatusDisplayFromDisable(GameObject statusDisplayGo, Aircraft aircraft)
+        {
+            if (statusDisplayGo == null || aircraft == null) return;
+
+            try
+            {
+                StatusDisplay statusDisplay = statusDisplayGo.GetComponent<StatusDisplay>();
+                if (statusDisplay == null) return;
+
+                RemoveEventHandler(aircraft, "remove_onDisableUnit", statusDisplay, "StatusDisplay_OnDisable");
+            }
+            catch (Exception e)
+            {
+                Plugin.Log.LogWarning($"[View] StatusDisplay onDisableUnit detach failed: {e.GetType().Name}: {e.Message}");
+            }
         }
 
         private static void RefreshCockpitUiState(Aircraft ac)

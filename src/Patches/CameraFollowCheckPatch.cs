@@ -18,10 +18,7 @@ namespace SimpleWSO.Patches
             if (!GunnerState.Active || GunnerState.TargetAircraft == null || __instance == null)
                 return true;
 
-            if (__instance.followingUnit == GunnerState.TargetAircraft)
-                return false;
-
-            return true;
+            return __instance.followingUnit != GunnerState.TargetAircraft;
         }
     }
 }

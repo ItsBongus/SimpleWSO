@@ -1,6 +1,7 @@
 using BepInEx.Configuration;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using UnityEngine;
 
 namespace SimpleWSO.Core
@@ -17,6 +18,11 @@ namespace SimpleWSO.Core
 
         public static ConfigEntry<bool> ReplaceSharedTargets;
         public static ConfigEntry<bool> VerboseLogging;
+        private const int MaxCameraPositions = 4;
+        /// <summary>Positions 2..N pre-bound so they appear in BepInEx Configuration Manager (F1).</summary>
+        private const int ConfigManagerCameraSlots = 4;
+        private const string CameraOffsetsSection = "CameraOffsets";
+
         private static ConfigFile _configFile;
         private static readonly Dictionary<string, ConfigEntry<string>> CameraOffsetEntries =
             new Dictionary<string, ConfigEntry<string>>();
@@ -68,8 +74,22 @@ namespace SimpleWSO.Core
             foreach (string aircraftKey in BaselineCameraOffsets.Keys)
             {
                 GetCameraOffsetEntry(aircraftKey);
-                EnsureExtraCameraPositionEntries(aircraftKey);
+                EnsureDefaultExtraCameraPositionEntries(aircraftKey);
             }
+
+            RegisterExistingCameraOffsetEntries();
+            EnsureConfigManagerCameraSlotsForAllKnownAircraft();
+        }
+
+        /// <summary>
+        /// Ensures position 1 and optional .Position2.. slots exist for Configuration Manager editing.
+        /// </summary>
+        public static void EnsureCameraOffsetsFor(Aircraft aircraft)
+        {
+            if (aircraft == null) return;
+            string key = CameraOffsetKey(aircraft);
+            GetCameraOffsetEntry(key);
+            EnsureConfigManagerCameraSlots(key);
         }
 
         public static string CameraOffsetKey(Aircraft aircraft)
@@ -95,26 +115,36 @@ namespace SimpleWSO.Core
         public static Vector3 GetCameraOffset(Aircraft aircraft, int positionIndex)
         {
             string key = CameraOffsetKey(aircraft);
-            if (positionIndex > 0 &&
-                TryParseVector(GetExtraCameraPositionEntry(key, positionIndex + 1).Value, out Vector3 positionOffset))
+            if (positionIndex <= 0)
+                return GetPrimaryCameraOffset(key);
+
+            int remaining = positionIndex;
+            for (int positionNumber = 2; positionNumber <= MaxCameraPositions; positionNumber++)
             {
-                return positionOffset;
+                if (!TryReadCameraPosition(key, positionNumber, out Vector3 offset))
+                    continue;
+
+                remaining--;
+                if (remaining == 0)
+                    return offset;
             }
 
             return GetPrimaryCameraOffset(key);
         }
 
+        /// <summary>
+        /// Position 1 plus every .PositionN entry with a valid x,y,z value (empty slots are skipped).
+        /// </summary>
         public static int GetCameraPositionCount(Aircraft aircraft)
         {
             string key = CameraOffsetKey(aircraft);
-            if (!ExtraCameraPositionDefaults.TryGetValue(key, out var defaults))
-                return 1;
+            GetCameraOffsetEntry(key);
 
             int count = 1;
-            for (int i = 0; i < defaults.Length; i++)
+            for (int positionNumber = 2; positionNumber <= MaxCameraPositions; positionNumber++)
             {
-                if (TryParseVector(GetExtraCameraPositionEntry(key, i + 2).Value, out _))
-                    count = i + 2;
+                if (TryReadCameraPosition(key, positionNumber, out _))
+                    count++;
             }
 
             return count;
@@ -135,34 +165,152 @@ namespace SimpleWSO.Core
             if (!CameraOffsetEntries.TryGetValue(key, out var entry))
             {
                 string defaultValue = FormatVector(GetBaselineCameraOffset(key));
-                entry = _configFile.Bind("CameraOffsets", key, defaultValue,
-                    "Gunner camera position 1 (aircraft-local meters from origin: X right, Y up, Z forward).");
+                entry = _configFile.Bind(
+                    CameraOffsetsSection,
+                    key,
+                    defaultValue,
+                    CreateCameraPositionDescription(key, 1));
                 CameraOffsetEntries[key] = entry;
             }
             return entry;
         }
 
-        private static void EnsureExtraCameraPositionEntries(string key)
+        private static void EnsureConfigManagerCameraSlotsForAllKnownAircraft()
         {
-            if (!ExtraCameraPositionDefaults.TryGetValue(key, out var defaults))
+            if (_configFile == null) return;
+
+            var aircraftKeys = new HashSet<string>(BaselineCameraOffsets.Keys);
+            foreach (var def in _configFile.Keys.Where(d => d.Section == CameraOffsetsSection))
+            {
+                if (TryParsePositionEntryKey(def.Key, out string aircraftKey, out _))
+                    aircraftKeys.Add(aircraftKey);
+                else
+                    aircraftKeys.Add(def.Key);
+            }
+
+            foreach (string aircraftKey in aircraftKeys)
+                EnsureConfigManagerCameraSlots(aircraftKey);
+        }
+
+        /// <summary>
+        /// Registers empty .Position2.. slots so Configuration Manager can edit them in-game.
+        /// Empty values are ignored until the player fills them in.
+        /// </summary>
+        private static void EnsureConfigManagerCameraSlots(string aircraftKey)
+        {
+            for (int positionNumber = 2; positionNumber <= ConfigManagerCameraSlots; positionNumber++)
+            {
+                string entryKey = ExtraCameraEntryKey(aircraftKey, positionNumber);
+                if (!HasConfigEntry(entryKey))
+                    BindCameraOffsetEntry(entryKey, aircraftKey, positionNumber);
+            }
+        }
+
+        private static void EnsureDefaultExtraCameraPositionEntries(string aircraftKey)
+        {
+            if (!ExtraCameraPositionDefaults.TryGetValue(aircraftKey, out var defaults))
                 return;
 
             for (int i = 0; i < defaults.Length; i++)
-                GetExtraCameraPositionEntry(key, i + 2);
+                BindCameraOffsetEntry(ExtraCameraEntryKey(aircraftKey, i + 2), aircraftKey, i + 2);
         }
 
-        private static ConfigEntry<string> GetExtraCameraPositionEntry(string key, int positionNumber)
+        private static void RegisterExistingCameraOffsetEntries()
         {
-            string entryKey = $"{key}.Position{positionNumber}";
-            if (!CameraOffsetEntries.TryGetValue(entryKey, out var entry))
+            if (_configFile == null) return;
+
+            foreach (var def in _configFile.Keys.Where(d => d.Section == CameraOffsetsSection))
+                BindCameraOffsetEntryFromConfig(def.Key);
+        }
+
+        private static void BindCameraOffsetEntryFromConfig(string entryKey)
+        {
+            if (CameraOffsetEntries.ContainsKey(entryKey))
+                return;
+
+            if (TryParsePositionEntryKey(entryKey, out string aircraftKey, out int positionNumber))
+                BindCameraOffsetEntry(entryKey, aircraftKey, positionNumber);
+            else
+                GetCameraOffsetEntry(entryKey);
+        }
+
+        private static bool TryReadCameraPosition(string aircraftKey, int positionNumber, out Vector3 offset)
+        {
+            offset = default;
+            if (positionNumber == 1)
             {
-                string defaultValue = GetExtraCameraPositionDefault(key, positionNumber);
-                entry = _configFile.Bind("CameraOffsets", entryKey, defaultValue,
-                    $"Gunner camera position {positionNumber} (aircraft-local meters from origin: X right, Y up, Z forward).");
-                CameraOffsetEntries[entryKey] = entry;
+                offset = GetPrimaryCameraOffset(aircraftKey);
+                return true;
             }
+
+            string entryKey = ExtraCameraEntryKey(aircraftKey, positionNumber);
+            if (!HasConfigEntry(entryKey))
+                return false;
+
+            return TryParseVector(BindCameraOffsetEntry(entryKey, aircraftKey, positionNumber).Value, out offset);
+        }
+
+        private static bool HasConfigEntry(string entryKey)
+        {
+            if (CameraOffsetEntries.ContainsKey(entryKey))
+                return true;
+
+            return _configFile.Keys.Any(d => d.Section == CameraOffsetsSection && d.Key == entryKey);
+        }
+
+        private static string ExtraCameraEntryKey(string aircraftKey, int positionNumber)
+            => $"{aircraftKey}.Position{positionNumber}";
+
+        private static bool TryParsePositionEntryKey(string entryKey, out string aircraftKey, out int positionNumber)
+        {
+            aircraftKey = null;
+            positionNumber = 0;
+
+            const string suffix = ".Position";
+            int dot = entryKey.LastIndexOf(suffix, System.StringComparison.Ordinal);
+            if (dot < 0) return false;
+
+            if (!int.TryParse(entryKey.Substring(dot + suffix.Length), out positionNumber) || positionNumber < 2)
+                return false;
+
+            aircraftKey = entryKey.Substring(0, dot);
+            return !string.IsNullOrEmpty(aircraftKey);
+        }
+
+        private static ConfigEntry<string> BindCameraOffsetEntry(string entryKey, string aircraftKey, int positionNumber)
+        {
+            if (CameraOffsetEntries.TryGetValue(entryKey, out var entry))
+                return entry;
+
+            string defaultValue = GetExtraCameraPositionDefault(aircraftKey, positionNumber);
+            entry = _configFile.Bind(
+                CameraOffsetsSection,
+                entryKey,
+                defaultValue,
+                CreateCameraPositionDescription(aircraftKey, positionNumber));
+            CameraOffsetEntries[entryKey] = entry;
             return entry;
         }
+
+        private static ConfigDescription CreateCameraPositionDescription(string aircraftKey, int positionNumber)
+        {
+            string description = positionNumber == 1
+                ? "Aircraft-local meters from origin: X right, Y up, Z forward."
+                : "Aircraft-local meters from origin. Leave empty to disable this view.";
+
+            return new ConfigDescription(
+                description,
+                null,
+                new ConfigurationManagerAttributes
+                {
+                    Category = FormatAircraftDisplayName(aircraftKey),
+                    DispName = $"Position {positionNumber}",
+                    Order = positionNumber,
+                });
+        }
+
+        private static string FormatAircraftDisplayName(string aircraftKey)
+            => aircraftKey.Replace('_', ' ');
 
         private static string GetExtraCameraPositionDefault(string key, int positionNumber)
         {

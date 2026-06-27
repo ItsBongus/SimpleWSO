@@ -3,7 +3,7 @@
 Use this before tagging a release or after meaningful changes. Mark each item **PASS** / **FAIL** / **SKIP** and note the build (`Plugin.Version`), mission, and airframe.
 
 **Log file:** `BepInEx/LogOutput.log`  
-**Config:** `BepInEx/config/nuclearoption.simplewso.cfg`  
+**Config:** `BepInEx/config/com.bongus.simplewso.cfg`  
 **Defaults:** `H` possess/leave · `U` share targets · vanilla **Next/Previous Weapon** · vanilla **Fire**
 
 Enable `VerboseLogging = true` when diagnosing failures.

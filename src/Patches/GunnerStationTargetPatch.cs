@@ -24,7 +24,7 @@ namespace SimpleWSO.Patches
         [HarmonyPrefix]
         public static bool Prefix(WeaponStation __instance, Aircraft aircraft, bool isActive)
         {
-            if (aircraft == null || __instance == null ||
+            if (aircraft == null || aircraft.disabled || __instance == null ||
                 !SimpleWsoNet.IsRemoteGunnerStation(aircraft.NetId, __instance.Number))
             {
                 return true;
@@ -51,7 +51,7 @@ namespace SimpleWSO.Patches
         public static bool Prefix(WeaponStation __instance)
         {
             Aircraft ac = StationDiscovery.GetAircraft(__instance);
-            return ac == null || !SimpleWsoNet.IsRemoteGunnerStation(ac.NetId, __instance.Number);
+            return ac == null || ac.disabled || !SimpleWsoNet.IsRemoteGunnerStation(ac.NetId, __instance.Number);
         }
     }
 
@@ -60,7 +60,7 @@ namespace SimpleWSO.Patches
     {
         [HarmonyPrefix]
         public static bool Prefix(Aircraft __instance, byte stationIndex)
-            => !SimpleWsoNet.IsRemoteGunnerStation(__instance.NetId, stationIndex);
+            => __instance == null || __instance.disabled || !SimpleWsoNet.IsRemoteGunnerStation(__instance.NetId, stationIndex);
     }
 
     [HarmonyPatch(typeof(Aircraft), "SetTurretVector")]
@@ -72,7 +72,9 @@ namespace SimpleWSO.Patches
             if (TurretController.AllowTurretAimAuthority)
                 return true;
 
-            return !SimpleWsoNet.IsRemoteGunnerStation(__instance.NetId, weaponStationIndex);
+            return __instance == null ||
+                   __instance.disabled ||
+                   !SimpleWsoNet.IsRemoteGunnerStation(__instance.NetId, weaponStationIndex);
         }
     }
 }

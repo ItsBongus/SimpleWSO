@@ -21,7 +21,7 @@ namespace SimpleWSO.Gunner
 
         public static bool IsGunnerControlledStation(WeaponStation station, Aircraft owner)
         {
-            if (station == null || owner == null) return false;
+            if (station == null || owner == null || owner.disabled) return false;
 
             if (GunnerState.Active &&
                 GunnerState.TargetAircraft == owner &&
