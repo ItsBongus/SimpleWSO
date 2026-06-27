@@ -43,3 +43,4 @@ BepInEx Configuration Manager (https://github.com/BepInEx/BepInEx.ConfigurationM
 | U | `ShareTargetsKey` | Share targets with the other seat |
 | K | `CycleCameraPositionKey` | Cycle configured gunner camera positions |
 
+Whole things CC0 do what you want with it.
