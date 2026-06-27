@@ -6,6 +6,8 @@ Gunners and Weapon System Officers for Nuclear Option. Simply select a friendly 
 - One button enter/exit
 - Gunner turret reticule (when turret selected) shown on pilot screen for coordination
 - Seperate target lists for pilot and Gunner, can be pushed bi-directionally from Gunner <-> Pilot
+- While turrets (Chicane gun, Ibis Turrets) are selected by gunner, Pilot cannot take control. Stops pilot ripping control from gunner while cycling weapons.
+- When Pilot and Gunner aren't controlling a turret, AI takes over like vanilla.
 - Works with AI or Player controlled aircraft
 - Works with all modded aircraft, KAR and BOTE
 - Auto creates camera entry positions for modded aircraft to allow custom placement of external cameras. Configurable in F1 or config file (see below)
