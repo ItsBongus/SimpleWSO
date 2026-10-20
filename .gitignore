@@ -1,0 +1,9 @@
+# Build artifacts
+src/bin/
+src/obj/
+*.user
+*.suo
+.vs/
+
+# Deployed plugin (local deploy)
+[Bb]epInEx/

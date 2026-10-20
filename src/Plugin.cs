@@ -14,7 +14,7 @@ namespace SimpleWSO
     {
         public const string Guid = "com.bongus.simplewso";
         public const string Name = "SimpleWSO";
-        public const string Version = "1.0.0";
+        public const string Version = "1.1.2";
 
         public static ManualLogSource Log;
         public static Plugin Instance;

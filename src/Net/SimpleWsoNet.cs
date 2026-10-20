@@ -43,6 +43,7 @@ namespace SimpleWSO.Net
         private static readonly Dictionary<uint, Aircraft> _ownerSubscribedAircraft = new Dictionary<uint, Aircraft>();
         private static readonly HashSet<uint> _pilotPresence = new HashSet<uint>();
         private static uint _lastPresenceAircraftNetId;
+        private static float _nextPresenceSend;
 
         // Last target persistentID we replicated per station. The turret-target Cmd is
         // rate-limited by the game, so we only re-send when the gunner's target changes.
@@ -129,6 +130,7 @@ namespace SimpleWSO.Net
             _ownerAppliedTargetId.Clear();
             _pilotPresence.Clear();
             _lastPresenceAircraftNetId = 0u;
+            _nextPresenceSend = 0f;
         }
 
         // ---- serializer registration (manual, no weaver) ----
@@ -250,16 +252,19 @@ namespace SimpleWSO.Net
             if (aircraft == null || aircraft.disabled || aircraft.Player == null)
                 return;
 
-            if (_lastPresenceAircraftNetId == aircraft.NetId)
+            float now = Time.unscaledTime;
+            if (_lastPresenceAircraftNetId == aircraft.NetId && now < _nextPresenceSend)
                 return;
 
             _lastPresenceAircraftNetId = aircraft.NetId;
+            _nextPresenceSend = now + 5f;
             _pilotPresence.Add(aircraft.NetId);
             Send(new WsoPresenceMsg
             {
                 AircraftNetId = aircraft.NetId,
                 Protocol = PresenceProtocol
             }, Channel.Reliable);
+            Plugin.LogVerbose($"[Net] Announced pilot presence for aircraft netId={aircraft.NetId}.");
         }
 
         public static bool HasPilotPresence(Aircraft aircraft)

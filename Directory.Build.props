@@ -1,0 +1,15 @@
+<Project>
+  <PropertyGroup>
+    <!-- Portable game-path resolution:
+         1. NUCLEAR_OPTION_PATH environment variable (for CI / other setups)
+         2. Detected Steam library path on this machine
+         3. Manual override via msbuild -p:NuclearOptionPath=...
+    -->
+    <NuclearOptionPath Condition="'$(NuclearOptionPath)' == ''">$(NUCLEAR_OPTION_PATH)</NuclearOptionPath>
+    <NuclearOptionPath Condition="'$(NuclearOptionPath)' == ''">/mnt/gamedisk/steam/steamapps/common/Nuclear Option</NuclearOptionPath>
+
+    <BepInExCore>$(NuclearOptionPath)/BepInEx/core</BepInExCore>
+    <ManagedPath>$(NuclearOptionPath)/NuclearOption_Data/Managed</ManagedPath>
+    <PluginsPath>$(NuclearOptionPath)/BepInEx/plugins</PluginsPath>
+  </PropertyGroup>
+</Project>
